@@ -1,11 +1,11 @@
 #!/usr/bin/python
 
 from ansible.module_utils.basic import AnsibleModule
+import subprocess
 
 def main():
     module = AnsibleModule(
         argument_spec={
-            'private_key': {'required': True, 'type': 'str'},
             'listen_port': {'default': 51820, 'type': 'int'},
             'addresses': {'required': True, 'type': 'list'},
             'peers': {'required': True, 'type': 'list'},
@@ -15,7 +15,6 @@ def main():
         supports_check_mode=True
     )
 
-    private_key = module.params['private_key']
     listen_port = module.params['listen_port']
     addresses = module.params['addresses']
     peers = module.params['peers']
@@ -27,8 +26,11 @@ def main():
         if check_mode:
             module.exit_json(changed=True)
         else:
+            # Generate the private key
+            private_key = subprocess.check_output(["wg", "genkey"])
+            public_key = subprocess.check_output(["wg", "pubkey"], input=private_key)
             # Create or update the WireGuard interface
-            create_or_update_interface(module, name, private_key, listen_port, addresses, peers)
+            create_or_update_interface(module, name, private_key, public_key, listen_port, addresses, peers)
     elif state == 'absent':
         if check_mode:
             module.exit_json(changed=True)
@@ -36,18 +38,18 @@ def main():
             # Delete the WireGuard interface
             delete_interface(module, name)
 
-def create_or_update_interface(module, name, private_key, listen_port, addresses, peers):
+def create_or_update_interface(module, name, private_key, public_key, listen_port, addresses, peers):
     # Check if the interface already exists
     interface_exists = check_interface_exists(module, name)
 
     # If the interface does not exist, create it
     if not interface_exists:
-        create_interface(module, name, private_key, listen_port, addresses, peers)
+        create_interface(module, name, private_key, public_key, listen_port, addresses, peers)
     else:
         # If the interface exists, update it
-        update_interface(module, name, private_key, listen_port, addresses, peers)
+        update_interface(module, name, private_key, public_key, listen_port, addresses, peers)
 
-def create_interface(module, name, private_key, listen_port, addresses, peers):
+def create_interface(module, name, private_key, public_key, listen_port, addresses, peers):
     # Use the wg command to create the interface
     # Example: wg setconf wg0 /etc/wireguard/wg0.conf
     command = "wg setconf {0} /etc/wireguard/{0}.conf".format(name)
@@ -57,9 +59,9 @@ def create_interface(module, name, private_key, listen_port, addresses, peers):
     if rc != 0:
         module.fail_json(msg="Failed to create WireGuard interface: {0}".format(err))
     else:
-        module.exit_json(changed=True, msg="Successfully created WireGuard interface")
+        module.exit_json(changed=True, msg="Successfully created WireGuard interface", private_key=private_key, public_key=public_key)
 
-def update_interface(module, name, private_key, listen_port, addresses, peers):
+def update_interface(module, name, private_key, public_key, listen_port, addresses, peers):
     # Use the wg command to update the interface
     # Example: wg setconf wg0 /etc/wireguard/wg0.conf
     command = "wg setconf {0} /etc/wireguard/{0}.conf".format(name)
@@ -69,7 +71,7 @@ def update_interface(module, name, private_key, listen_port, addresses, peers):
     if rc != 0:
         module.fail_json(msg="Failed to update WireGuard interface: {0}".format(err))
     else:
-        module.exit_json(changed=True, msg="Successfully updated WireGuard interface")
+        module.exit_json(changed=True, msg="Successfully updated WireGuard interface", private_key=private_key, public_key=public_key)
 
 def delete_interface(module, name):
     # Use the wg command to delete the interface
