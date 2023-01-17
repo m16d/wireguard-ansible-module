@@ -2,6 +2,8 @@
 
 from ansible.module_utils.basic import AnsibleModule
 import subprocess
+import os
+import shutil
 
 def main():
     module = AnsibleModule(
@@ -23,89 +25,108 @@ def main():
     check_mode = module.check_mode
 
     if state == 'present':
-        if check_mode:
+        if check_interface_exists(module, name) and check_config_file(module, name, listen_port, addresses, peers):
+            # The interface and the config file are already in the desired state
+            module.exit_json(changed=False, msg="WireGuard interface is already in the desired state")
+        elif check_mode:
             module.exit_json(changed=True)
         else:
+            # Backup the original config file
+            backup_config_file(module, name)
+            # Create or update the interface
             create_or_update_interface(module, name, listen_port, addresses, peers)
-
+            module.exit_json(changed=True, msg="Successfully created/updated WireGuard interface")
     elif state == 'absent':
         if check_interface_exists(module, name):
             if check_mode:
                 module.exit_json(changed=True)
             else:
-            # Delete the WireGuard interface
+                # Delete the interface
                 delete_interface(module, name)
+                # Remove the config file
+                remove_config_file(module, name)
                 module.exit_json(changed=True, msg="Successfully deleted WireGuard interface")
         else:
             module.exit_json(changed=False, msg="WireGuard interface does not exist")
+
+def remove_config_file(module, name):
+    config_file_path = "/etc/wireguard/{0}.conf".format(name)
+    os.remove(config_file_path)
 
 def create_or_update_interface(module, name, listen_port, addresses, peers):
     # Generate the private key and public key
     private_key, public_key = generate_key()
 
-    # Check if the interface already exists
-    interface_exists = check_interface_exists(module, name)
+    # Create/update the interface using wg-quick
+    command = "wg-quick up {0}".format(name)
+    rc, out, err = module.run_command(command)
 
-    # If the interface does not exist, create it
-    if not interface_exists:
-        create_interface(module, name, private_key, public_key, listen_port, addresses, peers)
+    # Check if the command was successful
+    if rc != 0:
+        module.fail_json(msg="Failed to create/update WireGuard interface: {0}".format(err))
     else:
-        # If the interface exists, update it
-        update_interface(module, name, private_key, public_key, listen_port, addresses, peers)
+        # Generate the config file
+        generate_config_file(module, name, private_key, public_key, listen_port, addresses, peers)
+        module.exit_json(changed=True, msg="Successfully created/updated WireGuard interface", public_key=public_key)
 
 def generate_key():
     private_key = subprocess.check_output(["wg", "genkey"])
     public_key = subprocess.check_output(["wg", "pubkey"], input=private_key)
     return private_key, public_key
 
-def create_interface(module, name, private_key, public_key, listen_port, addresses, peers):
-    # Use the wg command to create the interface
-    # Example: wg setconf wg0 /etc/wireguard/wg0.conf
-    command = "wg setconf {0} /etc/wireguard/{0}.conf".format(name)
-    rc, out, err = module.run_command(command)
+def backup_config_file(module, name):
+    config_file_path = "/etc/wireguard/{0}.conf".format(name)
+    if os.path.exists(config_file_path):
+        shutil.copy(config_file_path, config_file_path + ".backup")
 
-    # Check if the command was successful
-    if rc != 0:
-        module.fail_json(msg="Failed to create WireGuard interface: {0}".format(err))
+def check_config_file(module, name, listen_port, addresses, peers):
+    config_file_path = "/etc/wireguard/{0}.conf".format(name)
+    if os.path.exists(config_file_path):
+        # Compare the current config file with the desired config
+        # Open the current config file
+        config_file = open(config_file_path, 'r')
+        current_config = config_file.read()
+        config_file.close()
+        # Generate the desired config
+        desired_config = generate_config(listen_port, addresses, peers)
+        # Compare the configs
+        if current_config == desired_config:
+            return True
+        else:
+            return False
     else:
-        # Generate the config file
-        generate_config_file(module, name, private_key, public_key, listen_port, addresses, peers)
-        module.exit_json(changed=True, msg="Successfully created WireGuard interface", public_key=public_key)
+        return False
 
-def update_interface(module, name, private_key, public_key, listen_port, addresses, peers):
-    # Use the wg command to update the interface
-    # Example: wg setconf wg0 /etc/wireguard/wg0.conf
-    command = "wg setconf {0} /etc/wireguard/{0}.conf".format(name)
-    rc, out, err = module.run_command(command)
+def generate_config(listen_port, addresses, peers):
+    config = "[Interface]\n"
+    config += "ListenPort = {0}\n".format(listen_port)
+    for address in addresses:
+        config += "Address = {0}\n".format(address)
+    config += "[Peer]\n"
+    for peer in peers:
+        config += "PublicKey = {0}\n".format(peer['public_key'])
+        config += "AllowedIPs = {0}\n".format(peer['allowed_ips'])
+        if 'endpoint' in peer:
+            config += "Endpoint = {0}\n".format(peer['endpoint'])
+    return config
 
-    # Check if the command was successful
-    if rc != 0:
-        module.fail_json(msg="Failed to update WireGuard interface: {0}".format(err))
-    else:
-        # Generate the config file
-        generate_config_file(module, name, private_key, public_key, listen_port, addresses, peers)
-        module.exit_json(changed=True, msg="Successfully updated WireGuard interface", public_key=public_key)
-
+    
 def generate_config_file(module, name, private_key, public_key, listen_port, addresses, peers):
-    # Create the config file
-    config_file = open("/etc/wireguard/{0}.conf".format(name), "w")
+    config_file_path = "/etc/wireguard/{0}.conf".format(name)
+    config_file = open(config_file_path, 'w')
     config_file.write("[Interface]\n")
     config_file.write("PrivateKey = {0}\n".format(private_key))
     config_file.write("ListenPort = {0}\n".format(listen_port))
-    config_file.write("Address = {0}\n".format(' '.join(addresses)))
-    config_file.write("\n")
-
+    for address in addresses:
+        config_file.write("Address = {0}\n".format(address))
+    config_file.write("[Peer]\n")
     for peer in peers:
-        config_file.write("[Peer]\n")
         config_file.write("PublicKey = {0}\n".format(peer['public_key']))
         config_file.write("AllowedIPs = {0}\n".format(peer['allowed_ips']))
-        config_file.write("Endpoint = {0}:{1}\n".format(peer['endpoint']['address'],peer['endpoint']['port']))
-        if 'persistent_keepalive' in peer:
-            config_file.write("PersistentKeepalive = {0}\n".format(peer['persistent_keepalive']))
-        config_file.write("\n")
-        
+        if 'endpoint' in peer:
+            config_file.write("Endpoint = {0}\n".format(peer['endpoint']))
     config_file.close()
-    
+
 def delete_interface(module, name):
     # Use the wg command to delete the interface
     # Example: wg-quick down wg0
