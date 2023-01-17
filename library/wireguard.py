@@ -26,11 +26,8 @@ def main():
         if check_mode:
             module.exit_json(changed=True)
         else:
-            # Generate the private key
-            private_key = subprocess.check_output(["wg", "genkey"])
-            public_key = subprocess.check_output(["wg", "pubkey"], input=private_key)
-            # Create or update the WireGuard interface
-            create_or_update_interface(module, name, private_key, public_key, listen_port, addresses, peers)
+            create_or_update_interface(module, name, listen_port, addresses, peers)
+
     elif state == 'absent':
         if check_interface_exists(module, name):
             if check_mode:
@@ -38,10 +35,14 @@ def main():
             else:
             # Delete the WireGuard interface
                 delete_interface(module, name)
+                module.exit_json(changed=True, msg="Successfully deleted WireGuard interface")
         else:
             module.exit_json(changed=False, msg="WireGuard interface does not exist")
 
-def create_or_update_interface(module, name, private_key, public_key, listen_port, addresses, peers):
+def create_or_update_interface(module, name, listen_port, addresses, peers):
+    # Generate the private key and public key
+    private_key, public_key = generate_key()
+
     # Check if the interface already exists
     interface_exists = check_interface_exists(module, name)
 
@@ -51,6 +52,11 @@ def create_or_update_interface(module, name, private_key, public_key, listen_por
     else:
         # If the interface exists, update it
         update_interface(module, name, private_key, public_key, listen_port, addresses, peers)
+
+def generate_key():
+    private_key = subprocess.check_output(["wg", "genkey"])
+    public_key = subprocess.check_output(["wg", "pubkey"], input=private_key)
+    return private_key, public_key
 
 def create_interface(module, name, private_key, public_key, listen_port, addresses, peers):
     # Use the wg command to create the interface
@@ -97,7 +103,7 @@ def generate_config_file(module, name, private_key, public_key, listen_port, add
         if 'persistent_keepalive' in peer:
             config_file.write("PersistentKeepalive = {0}\n".format(peer['persistent_keepalive']))
         config_file.write("\n")
-
+        
     config_file.close()
     
 def delete_interface(module, name):
