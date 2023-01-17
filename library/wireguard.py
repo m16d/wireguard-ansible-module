@@ -25,29 +25,32 @@ def main():
     check_mode = module.check_mode
 
     if state == 'present':
-        if check_interface_exists(module, name) and check_config_file(module, name, listen_port, addresses, peers):
-            # The interface and the config file are already in the desired state
-            module.exit_json(changed=False, msg="WireGuard interface is already in the desired state")
-        elif check_mode:
+        create_or_update_interface_and_config(module, name, listen_port, addresses, peers, check_mode)
+    elif state == 'absent':
+        delete_interface_and_config(module, name, check_mode)
+
+def create_or_update_interface_and_config(module, name, listen_port, addresses, peers, check_mode):
+    if check_interface_exists(module, name) and check_config_file(module, name, listen_port, addresses, peers):
+        module.exit_json(changed=False, msg="WireGuard interface is already in the desired state")
+    elif check_mode:
+        module.exit_json(changed=True)
+    else:
+        backup_config_file(module, name)
+        private_key, public_key = generate_key()
+        create_or_update_interface(module, name)
+        generate_config_file(module, name, private_key, public_key, listen_port, addresses, peers)
+        module.exit_json(changed=True, msg="Successfully created/updated WireGuard interface", public_key=public_key)
+
+def delete_interface_and_config(module, name, check_mode):
+    if check_interface_exists(module, name):
+        if check_mode:
             module.exit_json(changed=True)
         else:
-            # Backup the original config file
-            backup_config_file(module, name)
-            # Create or update the interface
-            create_or_update_interface(module, name, listen_port, addresses, peers)
-            module.exit_json(changed=True, msg="Successfully created/updated WireGuard interface")
-    elif state == 'absent':
-        if check_interface_exists(module, name):
-            if check_mode:
-                module.exit_json(changed=True)
-            else:
-                # Delete the interface
-                delete_interface(module, name)
-                # Remove the config file
-                remove_config_file(module, name)
-                module.exit_json(changed=True, msg="Successfully deleted WireGuard interface")
-        else:
-            module.exit_json(changed=False, msg="WireGuard interface does not exist")
+            delete_interface(module, name)
+            remove_config_file(module, name)
+            module.exit_json(changed=True, msg="Successfully deleted WireGuard interface")
+    else:
+        module.exit_json(changed=False, msg="WireGuard interface does not exist")
 
 def remove_config_file(module, name):
     config_file_path = "/etc/wireguard/{0}.conf".format(name)
