@@ -60,8 +60,8 @@ def create_or_update_interface(module, name, listen_port, addresses, peers):
     # Generate the private key and public key
     private_key, public_key = generate_key()
 
-    # Create/update the interface using wg-quick
-    command = "wg-quick up {0}".format(name)
+    # Create/update the interface using wg
+    command = "wg addconf {0}".format(name)
     rc, out, err = module.run_command(command)
 
     # Check if the command was successful
@@ -132,8 +132,7 @@ def generate_config_file(module, name, private_key, public_key, listen_port, add
 
 def delete_interface(module, name):
     # Use the wg command to delete the interface
-    # Example: wg-quick down wg0
-    command = "wg-quick down {0}".format(name)
+    command = "wg delconf {0}".format(name)
     rc, out, err = module.run_command(command)
 
     # Check if the command was successful
